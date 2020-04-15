@@ -1,0 +1,193 @@
+<?php
+
+declare(strict_types = 1);
+
+namespace DanceEngineer\EventSauceProophEventStore;
+
+use ArrayIterator;
+use EventSauce\EventSourcing\AggregateRoot;
+use EventSauce\EventSourcing\AggregateRootId;
+use EventSauce\EventSourcing\AggregateRootRepository;
+use EventSauce\EventSourcing\DefaultHeadersDecorator;
+use EventSauce\EventSourcing\Header;
+use EventSauce\EventSourcing\Message;
+use EventSauce\EventSourcing\MessageDecorator;
+use EventSauce\EventSourcing\MessageDispatcher;
+use EventSauce\EventSourcing\Serialization\SerializablePayload;
+use EventSauce\EventSourcing\SynchronousMessageDispatcher;
+use Generator;
+use Iterator;
+use Prooph\Common\Messaging\Message as StreamMessage;
+use Prooph\EventStore\EventStore;
+use Prooph\EventStore\Exception\StreamNotFound;
+use Prooph\EventStore\Metadata\MetadataMatcher;
+use Prooph\EventStore\Metadata\Operator;
+use Prooph\EventStore\Stream;
+use Prooph\EventStore\StreamName;
+use Ramsey\Uuid\Uuid;
+
+final class ProophEventStoreRepository implements AggregateRootRepository
+{
+
+    private const AGGREGATE_VERSION = '_aggregate_version';
+    private const AGGREGATE_TYPE    = '_aggregate_type';
+    private const AGGREGATE_ID      = '_aggregate_id';
+
+    private EventStore $eventStore;
+
+    private string $aggregateRootClassName;
+
+    private MessageDispatcher $dispatcher;
+
+    private MessageDecorator $decorator;
+
+    private array $metadata;
+
+    private bool $oneStreamPerAggregate;
+
+    private ?StreamName $streamName;
+
+    public function __construct(
+        string $aggregateRootClassName, ConfiguredEventStore $configuredEventStore,
+        MessageDispatcher $dispatcher = null, MessageDecorator $decorator = null
+    ) {
+        $this->aggregateRootClassName = $aggregateRootClassName;
+        $this->eventStore             = $configuredEventStore->eventStore();
+        $this->metadata               = $configuredEventStore->streamMetadata();
+        $this->streamName             = $configuredEventStore->streamName();
+        $this->oneStreamPerAggregate  = $configuredEventStore->hasOneStreamPerAggregate();
+        $this->dispatcher             = $dispatcher ?: new SynchronousMessageDispatcher();
+        $this->decorator              = $decorator ?: new DefaultHeadersDecorator();
+    }
+
+    public function retrieve(AggregateRootId $aggregateRootId): object
+    {
+        /** @var AggregateRoot $className */
+        $className = $this->aggregateRootClassName;
+        $events    = $this->transformToEvents($this->retrieveStreamMessages($aggregateRootId));
+
+        return $className::reconstituteFromEvents($aggregateRootId, $events);
+    }
+
+    /**
+     * @param \Iterator<StreamMessage> $streamMessages
+     * @return Generator<SerializablePayload>
+     */
+    private function transformToEvents(Iterator $streamMessages): Generator
+    {
+        $lastMessage = null;
+
+        foreach($streamMessages as $streamMessage) {
+            assert($streamMessage instanceof TransientDomainMessage,
+                   'Expected $streamMessage to be an instance of ' . TransientDomainMessage::class);
+
+            /** @var SerializablePayload $messageName */
+            $messageName = $streamMessage->messageName();
+            yield $messageName::fromPayload($streamMessage->payload());
+            $lastMessage = $streamMessage;
+        }
+
+        return $lastMessage instanceof TransientDomainMessage ? $lastMessage->metadata()[self::AGGREGATE_VERSION] : 0;
+    }
+
+    /**
+     * @return \Iterator<StreamMessage>
+     */
+    private function retrieveStreamMessages(AggregateRootId $aggregateRootId): Iterator
+    {
+        $streamName = $this->streamNameFor($aggregateRootId);
+
+        try {
+            if($this->oneStreamPerAggregate) {
+                $streamEvents = $this->eventStore->load($streamName, 1);
+            } else {
+                $metadataMatcher = (new MetadataMatcher())->withMetadataMatch(self::AGGREGATE_TYPE, Operator::EQUALS(),
+                                                                              $this->aggregateRootClassName)
+                    ->withMetadataMatch(self::AGGREGATE_ID, Operator::EQUALS(), $aggregateRootId->toString());
+                $streamEvents    = $this->eventStore->load($streamName, 1, null, $metadataMatcher);
+            }
+
+            if(!$streamEvents->valid()) {
+                return new ArrayIterator([]);
+            }
+
+            return $streamEvents;
+        } catch(StreamNotFound $e) {
+            return new ArrayIterator([]);
+        }
+    }
+
+    private function streamNameFor(AggregateRootId $aggregateRootId): StreamName
+    {
+        if($this->oneStreamPerAggregate) {
+            if($this->streamName === null) {
+                $prefix = $this->aggregateRootClassName;
+            } else {
+                $prefix = $this->streamName->toString();
+            }
+
+            return new StreamName($prefix . '-' . $aggregateRootId->toString());
+        }
+
+        return $this->streamName ?? new StreamName('event_stream');
+    }
+
+    public function persist(object $aggregateRoot): void
+    {
+        assert($aggregateRoot instanceof AggregateRoot,
+               'Expected $aggregateRoot to be an instance of ' . AggregateRoot::class);
+
+        $this->persistEvents($aggregateRoot->aggregateRootId(), $aggregateRoot->aggregateRootVersion(), ...
+                             $aggregateRoot->releaseEvents());
+    }
+
+    public function persistEvents(AggregateRootId $aggregateRootId, int $aggregateRootVersion, object ...$events): void
+    {
+        // decrease the aggregate root version by the number of raised events
+        // so the version of each message represents the version at the time
+        // of recording.
+        $aggregateRootVersion -= count($events);
+        $metadata             = [Header::AGGREGATE_ROOT_ID => $aggregateRootId];
+        $eventMessages        = array_map(function(object $event) use ($metadata, &$aggregateRootVersion) {
+            return $this->decorator->decorate(new Message($event, $metadata
+                                                                  + [Header::AGGREGATE_ROOT_VERSION => ++$aggregateRootVersion]));
+        }, $events);
+
+        $streamName     = $this->streamNameFor($aggregateRootId);
+        $streamMessages = $this->transformToStreamMessages($eventMessages, $aggregateRootId);
+
+        if($this->oneStreamPerAggregate && 1 === $streamMessages[0]->metadata()[self::AGGREGATE_VERSION]) {
+            $stream = new Stream($streamName, new ArrayIterator($streamMessages), $this->metadata);
+            $this->eventStore->create($stream);
+        } else {
+            $this->eventStore->appendTo($streamName, new ArrayIterator($streamMessages));
+        }
+
+        $this->dispatcher->dispatch(...$eventMessages);
+    }
+
+    /**
+     * @param array<Message> $eventMessages
+     * @return array<TransientDomainMessage>
+     */
+    private function transformToStreamMessages(
+        array $eventMessages, AggregateRootId $aggregateRootId
+    ): array {
+        $streamMessages = [];
+        foreach($eventMessages as $eventMessage) {
+            /** @var SerializablePayload $event */
+            $event            = $eventMessage->event();
+            $metadata         = [
+                self::AGGREGATE_ID      => $aggregateRootId->toString(),
+                self::AGGREGATE_TYPE    => $this->aggregateRootClassName,
+                self::AGGREGATE_VERSION => $eventMessage->header(Header::AGGREGATE_ROOT_VERSION),
+            ];
+            $streamMessages[] = new TransientDomainMessage(Uuid::uuid4()->toString(), get_class($event),
+                                                           $eventMessage->timeOfRecording()->dateTime(), $metadata,
+                                                           $event->toPayload());
+        }
+
+        return $streamMessages;
+    }
+
+}

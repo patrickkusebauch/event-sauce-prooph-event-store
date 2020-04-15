@@ -1,0 +1,27 @@
+{
+  "name": "dance-engineer/event-sauce-prooph-event-store",
+  "type": "library",
+  "description": "A repository for EventSauce that connects to a Prooph Event Store ",
+  "minimum-stability": "stable",
+  "license": "GPL-3.0",
+  "authors": [
+    {
+      "name": "Patrick Kusebauch",
+      "email": "patrick.kusebauch@gmail.com"
+    }
+  ],
+  "require-dev": {
+    "roave/security-advisories": "dev-master"
+  },
+  "autoload": {
+    "psr-4": {
+      "DanceEngineer\\EventSauceProophEventStore\\": "src/"
+    }
+  },
+  "require": {
+    "php": "^7.4",
+    "ramsey/uuid": "^4.0",
+    "eventsauce/eventsauce": "^0.8.1",
+    "prooph/event-store": "^7.5"
+  }
+}
