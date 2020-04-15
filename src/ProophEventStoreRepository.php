@@ -12,6 +12,7 @@ use EventSauce\EventSourcing\DefaultHeadersDecorator;
 use EventSauce\EventSourcing\Header;
 use EventSauce\EventSourcing\Message;
 use EventSauce\EventSourcing\MessageDecorator;
+use EventSauce\EventSourcing\MessageDecoratorChain;
 use EventSauce\EventSourcing\MessageDispatcher;
 use EventSauce\EventSourcing\Serialization\SerializablePayload;
 use EventSauce\EventSourcing\SynchronousMessageDispatcher;
@@ -57,7 +58,11 @@ final class ProophEventStoreRepository implements AggregateRootRepository
         $this->streamName             = $configuredEventStore->streamName();
         $this->oneStreamPerAggregate  = $configuredEventStore->hasOneStreamPerAggregate();
         $this->dispatcher             = $dispatcher ?: new SynchronousMessageDispatcher();
-        $this->decorator              = $decorator ?: new DefaultHeadersDecorator();
+        $this->decorator = $decorator
+            ? new MessageDecoratorChain($decorator, new
+            DefaultHeadersDecorator())
+            : new
+            DefaultHeadersDecorator();
     }
 
     public function retrieve(AggregateRootId $aggregateRootId): object
