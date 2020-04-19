@@ -58,7 +58,7 @@ final class ProophEventStoreRepository implements AggregateRootRepository
         $this->streamName             = $configuredEventStore->streamName();
         $this->oneStreamPerAggregate  = $configuredEventStore->hasOneStreamPerAggregate();
         $this->dispatcher             = $dispatcher ?: new SynchronousMessageDispatcher();
-        $this->decorator = $decorator
+        $this->decorator              = $decorator
             ? new MessageDecoratorChain($decorator, new
             DefaultHeadersDecorator())
             : new
@@ -148,10 +148,15 @@ final class ProophEventStoreRepository implements AggregateRootRepository
 
     public function persistEvents(AggregateRootId $aggregateRootId, int $aggregateRootVersion, object ...$events): void
     {
+        $numberOfEvents = count($events);
+        if($numberOfEvents === 0) {
+            return;
+        }
+
         // decrease the aggregate root version by the number of raised events
         // so the version of each message represents the version at the time
         // of recording.
-        $aggregateRootVersion -= count($events);
+        $aggregateRootVersion -= $numberOfEvents;
         $metadata             = [Header::AGGREGATE_ROOT_ID => $aggregateRootId];
         $eventMessages        = array_map(function(object $event) use ($metadata, &$aggregateRootVersion) {
             return $this->decorator->decorate(new Message($event, $metadata
