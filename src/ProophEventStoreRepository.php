@@ -27,6 +27,9 @@ use Prooph\EventStore\Stream;
 use Prooph\EventStore\StreamName;
 use Ramsey\Uuid\Uuid;
 
+/**
+ * @template T of AggregateRoot
+ */
 final class ProophEventStoreRepository implements AggregateRootRepository
 {
 
@@ -36,28 +39,35 @@ final class ProophEventStoreRepository implements AggregateRootRepository
 
     private EventStore $eventStore;
 
+    /** @psalm-var class-string<T> */
     private string $aggregateRootClassName;
 
     private MessageDispatcher $dispatcher;
 
     private MessageDecorator $decorator;
 
+    /** @var array<mixed> */
     private array $metadata;
 
     private bool $oneStreamPerAggregate;
 
     private ?StreamName $streamName;
 
+    /**
+     * @psalm-param class-string<T> $aggregateRootClassName
+     */
     public function __construct(
-        string $aggregateRootClassName, ConfiguredEventStore $configuredEventStore,
-        MessageDispatcher $dispatcher = null, MessageDecorator $decorator = null
+        string $aggregateRootClassName,
+        ConfiguredEventStore $configuredEventStore,
+        MessageDispatcher $dispatcher = null,
+        MessageDecorator $decorator = null
     ) {
         $this->aggregateRootClassName = $aggregateRootClassName;
         $this->eventStore             = $configuredEventStore->eventStore();
         $this->metadata               = $configuredEventStore->streamMetadata();
         $this->streamName             = $configuredEventStore->streamName();
         $this->oneStreamPerAggregate  = $configuredEventStore->hasOneStreamPerAggregate();
-        $this->dispatcher             = $dispatcher ?: new SynchronousMessageDispatcher();
+        $this->dispatcher             = $dispatcher ?? new SynchronousMessageDispatcher();
         $this->decorator              = $decorator
             ? new MessageDecoratorChain($decorator, new
             DefaultHeadersDecorator())
@@ -65,9 +75,11 @@ final class ProophEventStoreRepository implements AggregateRootRepository
             DefaultHeadersDecorator();
     }
 
+    /**
+     * @psalm-return T
+     */
     public function retrieve(AggregateRootId $aggregateRootId): object
     {
-        /** @var AggregateRoot $className */
         $className = $this->aggregateRootClassName;
         $events    = $this->transformToEvents($this->retrieveStreamMessages($aggregateRootId));
 
@@ -75,16 +87,16 @@ final class ProophEventStoreRepository implements AggregateRootRepository
     }
 
     /**
-     * @param \Iterator<StreamMessage> $streamMessages
+     * @param  \Iterator<StreamMessage>  $streamMessages
      * @return Generator<SerializablePayload>
      */
     private function transformToEvents(Iterator $streamMessages): Generator
     {
         $lastMessage = null;
 
-        foreach($streamMessages as $streamMessage) {
+        foreach ($streamMessages as $streamMessage) {
             assert($streamMessage instanceof TransientDomainMessage,
-                   'Expected $streamMessage to be an instance of ' . TransientDomainMessage::class);
+                'Expected $streamMessage to be an instance of '.TransientDomainMessage::class);
 
             /** @var SerializablePayload $messageName */
             $messageName = $streamMessage->messageName();
@@ -103,35 +115,35 @@ final class ProophEventStoreRepository implements AggregateRootRepository
         $streamName = $this->streamNameFor($aggregateRootId);
 
         try {
-            if($this->oneStreamPerAggregate) {
+            if ($this->oneStreamPerAggregate) {
                 $streamEvents = $this->eventStore->load($streamName, 1);
             } else {
                 $metadataMatcher = (new MetadataMatcher())->withMetadataMatch(self::AGGREGATE_TYPE, Operator::EQUALS(),
-                                                                              $this->aggregateRootClassName)
+                    $this->aggregateRootClassName)
                     ->withMetadataMatch(self::AGGREGATE_ID, Operator::EQUALS(), $aggregateRootId->toString());
                 $streamEvents    = $this->eventStore->load($streamName, 1, null, $metadataMatcher);
             }
 
-            if(!$streamEvents->valid()) {
+            if (!$streamEvents->valid()) {
                 return new ArrayIterator([]);
             }
 
             return $streamEvents;
-        } catch(StreamNotFound $e) {
+        } catch (StreamNotFound $e) {
             return new ArrayIterator([]);
         }
     }
 
     private function streamNameFor(AggregateRootId $aggregateRootId): StreamName
     {
-        if($this->oneStreamPerAggregate) {
-            if($this->streamName === null) {
+        if ($this->oneStreamPerAggregate) {
+            if ($this->streamName === null) {
                 $prefix = $this->aggregateRootClassName;
             } else {
                 $prefix = $this->streamName->toString();
             }
 
-            return new StreamName($prefix . '-' . $aggregateRootId->toString());
+            return new StreamName($prefix.'-'.$aggregateRootId->toString());
         }
 
         return $this->streamName ?? new StreamName('event_stream');
@@ -140,16 +152,16 @@ final class ProophEventStoreRepository implements AggregateRootRepository
     public function persist(object $aggregateRoot): void
     {
         assert($aggregateRoot instanceof AggregateRoot,
-               'Expected $aggregateRoot to be an instance of ' . AggregateRoot::class);
+            'Expected $aggregateRoot to be an instance of '.AggregateRoot::class);
 
         $this->persistEvents($aggregateRoot->aggregateRootId(), $aggregateRoot->aggregateRootVersion(), ...
-                             $aggregateRoot->releaseEvents());
+            $aggregateRoot->releaseEvents());
     }
 
     public function persistEvents(AggregateRootId $aggregateRootId, int $aggregateRootVersion, object ...$events): void
     {
         $numberOfEvents = count($events);
-        if($numberOfEvents === 0) {
+        if ($numberOfEvents === 0) {
             return;
         }
 
@@ -158,15 +170,15 @@ final class ProophEventStoreRepository implements AggregateRootRepository
         // of recording.
         $aggregateRootVersion -= $numberOfEvents;
         $metadata             = [Header::AGGREGATE_ROOT_ID => $aggregateRootId];
-        $eventMessages        = array_map(function(object $event) use ($metadata, &$aggregateRootVersion) {
-            return $this->decorator->decorate(new Message($event, $metadata
-                                                                  + [Header::AGGREGATE_ROOT_VERSION => ++$aggregateRootVersion]));
+        $eventMessages        = array_map(function (object $event) use ($metadata, &$aggregateRootVersion) {
+            return $this->decorator->decorate(new Message($event,
+                $metadata + [Header::AGGREGATE_ROOT_VERSION => ++$aggregateRootVersion]));
         }, $events);
 
         $streamName     = $this->streamNameFor($aggregateRootId);
         $streamMessages = $this->transformToStreamMessages($eventMessages, $aggregateRootId);
 
-        if($this->oneStreamPerAggregate && 1 === $streamMessages[0]->metadata()[self::AGGREGATE_VERSION]) {
+        if ($this->oneStreamPerAggregate && 1 === $streamMessages[0]->metadata()[self::AGGREGATE_VERSION]) {
             $stream = new Stream($streamName, new ArrayIterator($streamMessages), $this->metadata);
             $this->eventStore->create($stream);
         } else {
@@ -177,14 +189,15 @@ final class ProophEventStoreRepository implements AggregateRootRepository
     }
 
     /**
-     * @param array<Message> $eventMessages
+     * @param  array<Message>  $eventMessages
      * @return array<TransientDomainMessage>
      */
     private function transformToStreamMessages(
-        array $eventMessages, AggregateRootId $aggregateRootId
+        array $eventMessages,
+        AggregateRootId $aggregateRootId
     ): array {
         $streamMessages = [];
-        foreach($eventMessages as $eventMessage) {
+        foreach ($eventMessages as $eventMessage) {
             /** @var SerializablePayload $event */
             $event            = $eventMessage->event();
             $metadata         = [
@@ -192,9 +205,9 @@ final class ProophEventStoreRepository implements AggregateRootRepository
                 self::AGGREGATE_TYPE    => $this->aggregateRootClassName,
                 self::AGGREGATE_VERSION => $eventMessage->header(Header::AGGREGATE_ROOT_VERSION),
             ];
-            $streamMessages[] = new TransientDomainMessage(Uuid::uuid4()->toString(), get_class($event),
-                                                           $eventMessage->timeOfRecording()->dateTime(), $metadata,
-                                                           $event->toPayload());
+            $streamMessages[] = new TransientDomainMessage(Uuid::uuid4()
+                ->toString(), get_class($event), $eventMessage->timeOfRecording()
+                ->dateTime(), $metadata, $event->toPayload());
         }
 
         return $streamMessages;

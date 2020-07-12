@@ -12,12 +12,18 @@ final class ConfiguredEventStore
 
     private bool $oneStreamPerAggregate;
 
+    /** @var array<mixed> */
     private array $streamMetadata;
 
     private ?StreamName $streamName;
 
+    /**
+     * @param  array<mixed>  $streamMetadata
+     */
     public function __construct(
-        EventStore $eventStore, bool $oneStreamPerAggregate = false, array $streamMetadata = [],
+        EventStore $eventStore,
+        bool $oneStreamPerAggregate = false,
+        array $streamMetadata = [],
         ?StreamName $streamName = null
     ) {
         $this->eventStore            = $eventStore;
@@ -36,6 +42,9 @@ final class ConfiguredEventStore
         return $this->oneStreamPerAggregate;
     }
 
+    /**
+     * @return array<mixed>
+     */
     public function streamMetadata(): array
     {
         return $this->streamMetadata;

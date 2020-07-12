@@ -10,32 +10,35 @@ use Prooph\Common\Messaging\Message;
 use Prooph\Common\Messaging\MessageFactory;
 use Ramsey\Uuid\Uuid;
 use UnexpectedValueException;
+
 use function class_exists;
 
 final class EventSauceMessageFactory implements MessageFactory
 {
 
     /**
+     * @param  array<mixed>  $messageData
      * @throws \UnexpectedValueException
      */
     public function createMessageFromArray(string $messageName, array $messageData): Message
     {
-        if(!class_exists($messageName)) {
-            throw new UnexpectedValueException('Given message name is not a valid class: ' . (string) $messageName);
+        if (!class_exists($messageName)) {
+            throw new UnexpectedValueException('Given message name is not a valid class: '.$messageName);
         }
-        if(!isset($messageData['message_name'])) {
+        if (!isset($messageData['message_name'])) {
             $messageData['message_name'] = $messageName;
         }
 
-        if(!isset($messageData['uuid'])) {
-            $messageData['uuid'] = Uuid::uuid4()->toString();
+        if (!isset($messageData['uuid'])) {
+            $messageData['uuid'] = Uuid::uuid4()
+                ->toString();
         }
 
-        if(!isset($messageData['created_at'])) {
+        if (!isset($messageData['created_at'])) {
             $messageData['created_at'] = new DateTimeImmutable('now', new DateTimeZone('UTC'));
         }
 
-        if(!isset($messageData['metadata'])) {
+        if (!isset($messageData['metadata'])) {
             $messageData['metadata'] = [];
         }
 
