@@ -178,7 +178,9 @@ final class ProophEventStoreRepository implements AggregateRootRepository
         $streamName     = $this->streamNameFor($aggregateRootId);
         $streamMessages = $this->transformToStreamMessages($eventMessages, $aggregateRootId);
 
-        if ($this->oneStreamPerAggregate && 1 === $streamMessages[0]->metadata()[self::AGGREGATE_VERSION]) {
+        if (($this->oneStreamPerAggregate && 1 === $streamMessages[0]->metadata()[self::AGGREGATE_VERSION])
+            || !$this->eventStore->hasStream($streamName)
+        ) {
             $stream = new Stream($streamName, new ArrayIterator($streamMessages), $this->metadata);
             $this->eventStore->create($stream);
         } else {
