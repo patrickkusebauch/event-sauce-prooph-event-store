@@ -5,17 +5,20 @@ namespace DanceEngineer\EventSauceProophEventStore;
 use Prooph\EventStore\EventStore;
 use Prooph\EventStore\StreamName;
 
+/**
+ * @psalm-immutable 
+ */
 final class ConfiguredEventStore
 {
 
-    private EventStore $eventStore;
+    public EventStore $eventStore;
 
-    private bool $oneStreamPerAggregate;
+    public bool $oneStreamPerAggregate;
 
     /** @var array<mixed> */
-    private array $streamMetadata;
+    public array $streamMetadata;
 
-    private ?StreamName $streamName;
+    public ?StreamName $streamName;
 
     /**
      * @param  array<mixed>  $streamMetadata
@@ -30,29 +33,6 @@ final class ConfiguredEventStore
         $this->oneStreamPerAggregate = $oneStreamPerAggregate;
         $this->streamMetadata        = $streamMetadata;
         $this->streamName            = $streamName;
-    }
-
-    public function eventStore(): EventStore
-    {
-        return $this->eventStore;
-    }
-
-    public function hasOneStreamPerAggregate(): bool
-    {
-        return $this->oneStreamPerAggregate;
-    }
-
-    /**
-     * @return array<mixed>
-     */
-    public function streamMetadata(): array
-    {
-        return $this->streamMetadata;
-    }
-
-    public function streamName(): ?StreamName
-    {
-        return $this->streamName;
     }
 
 }

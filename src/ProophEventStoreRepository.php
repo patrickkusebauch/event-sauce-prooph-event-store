@@ -19,7 +19,6 @@ use EventSauce\EventSourcing\SynchronousMessageDispatcher;
 use Generator;
 use Iterator;
 use Prooph\Common\Messaging\Message as StreamMessage;
-use Prooph\EventStore\EventStore;
 use Prooph\EventStore\Exception\StreamNotFound;
 use Prooph\EventStore\Metadata\MetadataMatcher;
 use Prooph\EventStore\Metadata\Operator;
@@ -36,9 +35,7 @@ final class ProophEventStoreRepository implements AggregateRootRepository
     private const AGGREGATE_VERSION = '_aggregate_version';
     private const AGGREGATE_TYPE    = '_aggregate_type';
     private const AGGREGATE_ID      = '_aggregate_id';
-
-    private EventStore $eventStore;
-
+    
     /** @psalm-var class-string<T> */
     private string $aggregateRootClassName;
 
@@ -46,12 +43,10 @@ final class ProophEventStoreRepository implements AggregateRootRepository
 
     private MessageDecorator $decorator;
 
-    /** @var array<mixed> */
-    private array $metadata;
+    private ConfiguredEventStore $configuredEventStore;
 
-    private bool $oneStreamPerAggregate;
-
-    private ?StreamName $streamName;
+    /** @var array<callable(string, string, array<Message>):void> */
+    public array $onNewEvents = [];
 
     /**
      * @psalm-param class-string<T> $aggregateRootClassName
@@ -63,10 +58,7 @@ final class ProophEventStoreRepository implements AggregateRootRepository
         MessageDecorator $decorator = null
     ) {
         $this->aggregateRootClassName = $aggregateRootClassName;
-        $this->eventStore             = $configuredEventStore->eventStore();
-        $this->metadata               = $configuredEventStore->streamMetadata();
-        $this->streamName             = $configuredEventStore->streamName();
-        $this->oneStreamPerAggregate  = $configuredEventStore->hasOneStreamPerAggregate();
+        $this->configuredEventStore = $configuredEventStore;
         $this->dispatcher             = $dispatcher ?? new SynchronousMessageDispatcher();
         $this->decorator              = $decorator
             ? new MessageDecoratorChain($decorator, new
@@ -115,13 +107,13 @@ final class ProophEventStoreRepository implements AggregateRootRepository
         $streamName = $this->streamNameFor($aggregateRootId);
 
         try {
-            if ($this->oneStreamPerAggregate) {
-                $streamEvents = $this->eventStore->load($streamName, 1);
+            if ($this->configuredEventStore->oneStreamPerAggregate) {
+                $streamEvents = $this->configuredEventStore->eventStore->load($streamName);
             } else {
                 $metadataMatcher = (new MetadataMatcher())->withMetadataMatch(self::AGGREGATE_TYPE, Operator::EQUALS(),
                     $this->aggregateRootClassName)
                     ->withMetadataMatch(self::AGGREGATE_ID, Operator::EQUALS(), $aggregateRootId->toString());
-                $streamEvents    = $this->eventStore->load($streamName, 1, null, $metadataMatcher);
+                $streamEvents    = $this->configuredEventStore->eventStore->load($streamName, 1, null, $metadataMatcher);
             }
 
             if (!$streamEvents->valid()) {
@@ -136,17 +128,17 @@ final class ProophEventStoreRepository implements AggregateRootRepository
 
     private function streamNameFor(AggregateRootId $aggregateRootId): StreamName
     {
-        if ($this->oneStreamPerAggregate) {
-            if ($this->streamName === null) {
+        if ($this->configuredEventStore->oneStreamPerAggregate) {
+            if ($this->configuredEventStore->streamName === null) {
                 $prefix = $this->aggregateRootClassName;
             } else {
-                $prefix = $this->streamName->toString();
+                $prefix = $this->configuredEventStore->streamName->toString();
             }
 
             return new StreamName($prefix.'-'.$aggregateRootId->toString());
         }
 
-        return $this->streamName ?? new StreamName('event_stream');
+        return $this->configuredEventStore->streamName ?? new StreamName('event_stream');
     }
 
     public function persist(object $aggregateRoot): void
@@ -178,13 +170,17 @@ final class ProophEventStoreRepository implements AggregateRootRepository
         $streamName     = $this->streamNameFor($aggregateRootId);
         $streamMessages = $this->transformToStreamMessages($eventMessages, $aggregateRootId);
 
-        if (($this->oneStreamPerAggregate && 1 === $streamMessages[0]->metadata()[self::AGGREGATE_VERSION])
-            || !$this->eventStore->hasStream($streamName)
+        if (($this->configuredEventStore->oneStreamPerAggregate
+             && $streamMessages[0]->metadata()[self::AGGREGATE_VERSION] === 1)
+            || !$this->configuredEventStore->eventStore->hasStream($streamName)
         ) {
-            $stream = new Stream($streamName, new ArrayIterator($streamMessages), $this->metadata);
-            $this->eventStore->create($stream);
+            $stream = new Stream($streamName, new ArrayIterator($streamMessages), $this->configuredEventStore->streamMetadata);
+            $this->configuredEventStore->eventStore->create($stream);
         } else {
-            $this->eventStore->appendTo($streamName, new ArrayIterator($streamMessages));
+            $this->configuredEventStore->eventStore->appendTo($streamName, new ArrayIterator($streamMessages));
+        }
+        foreach ($this->onNewEvents as $callback) {
+            $callback($this->aggregateRootClassName, $streamName->toString(), $eventMessages);
         }
 
         $this->dispatcher->dispatch(...$eventMessages);

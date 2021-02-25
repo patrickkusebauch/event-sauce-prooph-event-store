@@ -11,8 +11,6 @@ use Prooph\Common\Messaging\MessageFactory;
 use Ramsey\Uuid\Uuid;
 use UnexpectedValueException;
 
-use function class_exists;
-
 final class EventSauceMessageFactory implements MessageFactory
 {
 
