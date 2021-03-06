@@ -33,7 +33,7 @@
     "sort-packages": true
   },
   "require": {
-    "php": "^7.4",
+    "php": "^7.4 || ^8.0",
     "ramsey/uuid": "^4.0",
     "eventsauce/eventsauce": "^0.8.1",
     "prooph/event-store": "^7.5"
