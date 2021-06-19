@@ -211,4 +211,9 @@ final class ProophEventStoreRepository implements AggregateRootRepository
         return $streamMessages;
     }
 
+    public function setDispatcher(MessageDispatcher $dispatcher): void
+    {
+        $this->dispatcher = $dispatcher;
+    }
+
 }
