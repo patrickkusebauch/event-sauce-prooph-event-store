@@ -28,6 +28,7 @@ use Ramsey\Uuid\Uuid;
 
 /**
  * @template T of AggregateRoot
+ * @implements AggregateRootRepository<T>
  */
 final class ProophEventStoreRepository implements AggregateRootRepository
 {
@@ -72,10 +73,9 @@ final class ProophEventStoreRepository implements AggregateRootRepository
      */
     public function retrieve(AggregateRootId $aggregateRootId): object
     {
-        $className = $this->aggregateRootClassName;
         $events    = $this->transformToEvents($this->retrieveStreamMessages($aggregateRootId));
 
-        return $className::reconstituteFromEvents($aggregateRootId, $events);
+        return $this->aggregateRootClassName::reconstituteFromEvents($aggregateRootId, $events);
     }
 
     /**
@@ -203,9 +203,10 @@ final class ProophEventStoreRepository implements AggregateRootRepository
                 self::AGGREGATE_TYPE    => $this->aggregateRootClassName,
                 self::AGGREGATE_VERSION => $eventMessage->header(Header::AGGREGATE_ROOT_VERSION),
             ];
-            $streamMessages[] = new TransientDomainMessage(Uuid::uuid4()
-                ->toString(), get_class($event), $eventMessage->timeOfRecording()
-                ->dateTime(), $metadata, $event->toPayload());
+            $streamMessages[] = new TransientDomainMessage(
+                Uuid::uuid4()
+                    ->toString(), get_class($event), $eventMessage->timeOfRecording(), $metadata, $event->toPayload()
+            );
         }
 
         return $streamMessages;
